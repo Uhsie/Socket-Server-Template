@@ -1,78 +1,83 @@
 const http = require("http");
 const express = require("express");
 const app = express();
-const WebSocket = require("ws");
 
 app.use(express.static("public"));
+// require("dotenv").config();
 
 const serverPort = process.env.PORT || 3000;
 const server = http.createServer(app);
+const WebSocket = require("ws");
 
-let adminSocket = null;  // Store the admin socket
-let clients = [];  // Store client WebSocket connections
+let keepAliveId;
 
 const wss =
   process.env.NODE_ENV === "production"
     ? new WebSocket.Server({ server })
-    : new WebSocket.Server({ port: serverPort });
+    : new WebSocket.Server({ port: 5001 });
 
-server.listen(serverPort, () => {
-  console.log(`Server running on port ${serverPort}`);
-});
+server.listen(serverPort);
+console.log(`Server started on port ${serverPort} in stage ${process.env.NODE_ENV}`);
 
-wss.on("connection", function (ws) {
-  console.log("A new connection has been established");
+wss.on("connection", function (ws, req) {
+  console.log("Connection Opened");
+  console.log("Client size: ", wss.clients.size);
 
-  // Add the client to the clients array
-  clients.push(ws);
+  if (wss.clients.size === 1) {
+    console.log("first connection. starting keepalive");
+    keepServerAlive();
+  }
 
-  // When the client sends a message (client-side)
   ws.on("message", (data) => {
     let stringifiedData = data.toString();
-
-    // If data is from client, send it to the admin
-    if (clients.indexOf(ws) !== -1 && adminSocket) {
-      console.log("Received data from client:", stringifiedData);
-      if (adminSocket.readyState === WebSocket.OPEN) {
-        adminSocket.send(JSON.stringify({ type: 'new-data', data: stringifiedData }));
-      }
+    if (stringifiedData === 'pong') {
+      console.log('keepAlive');
+      return;
     }
-
-    // If data is from the admin (approve/reject), broadcast to all clients
-    if (ws === adminSocket && stringifiedData) {
-      const { action, clientData } = JSON.parse(stringifiedData);
-      console.log(`Admin action: ${action} for data: ${clientData}`);
-
-      // Send result to all clients
-      clients.forEach((client) => {
-        if (client.readyState === WebSocket.OPEN) {
-          client.send(JSON.stringify({
-            action,
-            message: action === 'approve' ? 'Data approved' : 'Data rejected',
-          }));
-        }
-      });
-    }
+    broadcast(ws, stringifiedData, false);
   });
 
-  ws.on("close", () => {
-    // Remove client from the array when connection is closed
-    clients = clients.filter(client => client !== ws);
+  ws.on("close", (data) => {
+    console.log("closing connection");
 
-    // Reset admin socket if admin disconnects
-    if (ws === adminSocket) {
-      adminSocket = null;
-      console.log("Admin disconnected");
+    if (wss.clients.size === 0) {
+      console.log("last client disconnected, stopping keepAlive interval");
+      clearInterval(keepAliveId);
     }
   });
-
-  // If this is the admin socket, store it
-  if (!adminSocket) {
-    adminSocket = ws;
-    console.log("Admin connected");
-  }
 });
 
+// Implement broadcast function because of ws doesn't have it
+const broadcast = (ws, message, includeSelf) => {
+  if (includeSelf) {
+    wss.clients.forEach((client) => {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(message);
+      }
+    });
+  } else {
+    wss.clients.forEach((client) => {
+      if (client !== ws && client.readyState === WebSocket.OPEN) {
+        client.send(message);
+      }
+    });
+  }
+};
+
+/**
+ * Sends a ping message to all connected clients every 50 seconds
+ */
+ const keepServerAlive = () => {
+  keepAliveId = setInterval(() => {
+    wss.clients.forEach((client) => {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send('ping');
+      }
+    });
+  }, 50000);
+};
+
+
 app.get('/', (req, res) => {
-  res.send('Hello World!');
+    res.send('Hello World!');
 });
