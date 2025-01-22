@@ -1,61 +1,54 @@
 const http = require("http");
 const express = require("express");
 const app = express();
+const WebSocket = require("ws");
 
 app.use(express.static("public"));
 
 const serverPort = process.env.PORT || 3000;
 const server = http.createServer(app);
-const WebSocket = require("ws");
 
-let keepAliveId;
-let adminSocket = null;  // Store the admin socket to send messages to it
-let clients = [];  // Store client connections
+let adminSocket = null;  // Store the admin socket
+let clients = [];  // Store client WebSocket connections
 
 const wss =
   process.env.NODE_ENV === "production"
     ? new WebSocket.Server({ server })
-    : new WebSocket.Server({ port: 5001 });
+    : new WebSocket.Server({ port: serverPort });
 
-server.listen(serverPort);
-console.log(`Server started on port ${serverPort} in stage ${process.env.NODE_ENV}`);
+server.listen(serverPort, () => {
+  console.log(`Server running on port ${serverPort}`);
+});
 
 wss.on("connection", function (ws) {
-  console.log("Connection Opened");
-  console.log("Clients size: ", wss.clients.size);
+  console.log("A new connection has been established");
 
-  // If it's the first connection, start the keepalive
-  if (wss.clients.size === 1) {
-    console.log("First connection. Starting keepalive");
-    keepServerAlive();
-  }
-
-  // Store clients
+  // Add the client to the clients array
   clients.push(ws);
 
+  // When the client sends a message (client-side)
   ws.on("message", (data) => {
     let stringifiedData = data.toString();
 
-    // If message is from the client, send it to the admin
+    // If data is from client, send it to the admin
     if (clients.indexOf(ws) !== -1 && adminSocket) {
       console.log("Received data from client:", stringifiedData);
-
-      // Send data to admin for approval
-      if (adminSocket && adminSocket.readyState === WebSocket.OPEN) {
+      if (adminSocket.readyState === WebSocket.OPEN) {
         adminSocket.send(JSON.stringify({ type: 'new-data', data: stringifiedData }));
       }
     }
 
-    // If message is from admin (approval/rejection), send the result to the client
+    // If data is from the admin (approve/reject), broadcast to all clients
     if (ws === adminSocket && stringifiedData) {
       const { action, clientData } = JSON.parse(stringifiedData);
       console.log(`Admin action: ${action} for data: ${clientData}`);
 
+      // Send result to all clients
       clients.forEach((client) => {
         if (client.readyState === WebSocket.OPEN) {
           client.send(JSON.stringify({
             action,
-            message: action === 'approve' ? 'Data approved' : 'Data rejected'
+            message: action === 'approve' ? 'Data approved' : 'Data rejected',
           }));
         }
       });
@@ -63,16 +56,8 @@ wss.on("connection", function (ws) {
   });
 
   ws.on("close", () => {
-    console.log("Closing connection");
-
-    // Remove client from the list
+    // Remove client from the array when connection is closed
     clients = clients.filter(client => client !== ws);
-
-    // If the last client disconnects, stop keepalive
-    if (clients.length === 0) {
-      console.log("Last client disconnected, stopping keepAlive interval");
-      clearInterval(keepAliveId);
-    }
 
     // Reset admin socket if admin disconnects
     if (ws === adminSocket) {
@@ -80,18 +65,13 @@ wss.on("connection", function (ws) {
       console.log("Admin disconnected");
     }
   });
-});
 
-// Sends a ping message to all connected clients every 50 seconds
-const keepServerAlive = () => {
-  keepAliveId = setInterval(() => {
-    wss.clients.forEach((client) => {
-      if (client.readyState === WebSocket.OPEN) {
-        client.send('ping');
-      }
-    });
-  }, 50000);
-};
+  // If this is the admin socket, store it
+  if (!adminSocket) {
+    adminSocket = ws;
+    console.log("Admin connected");
+  }
+});
 
 app.get('/', (req, res) => {
   res.send('Hello World!');
