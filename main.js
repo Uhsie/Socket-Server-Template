@@ -23,7 +23,7 @@ wss.on("connection", function (ws, req) {
   // Handle message from client or admin
   ws.on("message", (data) => {
     let stringifiedData = data.toString();
-    
+
     // If the message is "pong", we ignore it (client response to ping)
     if (stringifiedData === 'pong') {
       console.log('keepAlive');
@@ -34,30 +34,25 @@ wss.on("connection", function (ws, req) {
     broadcast(ws, stringifiedData, false);
   });
 
+  // We won't close the connection unless the client manually disconnects
   ws.on("close", () => {
-    console.log("Closing connection");
-
-    if (wss.clients.size === 0) {
-      console.log("Last client disconnected");
-    }
+    console.log("Client disconnected");
+    console.log("Client size: ", wss.clients.size);
   });
+
+  // When the server is no longer needed, manually disconnect the connection
+  // But for this case, we'll keep the connection open indefinitely.
 });
 
 // Implement broadcast function because WebSocket doesn't have it
 const broadcast = (ws, message, includeSelf) => {
-  if (includeSelf) {
-    wss.clients.forEach((client) => {
-      if (client.readyState === WebSocket.OPEN) {
+  wss.clients.forEach((client) => {
+    if (client.readyState === WebSocket.OPEN) {
+      if (includeSelf || client !== ws) {
         client.send(message);
       }
-    });
-  } else {
-    wss.clients.forEach((client) => {
-      if (client !== ws && client.readyState === WebSocket.OPEN) {
-        client.send(message);
-      }
-    });
-  }
+    }
+  });
 };
 
 app.get('/', (req, res) => {
