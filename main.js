@@ -3,10 +3,13 @@ const express = require("express");
 const app = express();
 
 app.use(express.static("public"));
+// require("dotenv").config();
 
 const serverPort = process.env.PORT || 3000;
 const server = http.createServer(app);
 const WebSocket = require("ws");
+
+let keepAliveId;
 
 const wss =
   process.env.NODE_ENV === "production"
@@ -20,41 +23,61 @@ wss.on("connection", function (ws, req) {
   console.log("Connection Opened");
   console.log("Client size: ", wss.clients.size);
 
-  // Handle message from client or admin
+  if (wss.clients.size === 1) {
+    console.log("first connection. starting keepalive");
+    keepServerAlive();
+  }
+
   ws.on("message", (data) => {
     let stringifiedData = data.toString();
-
-    // If the message is "pong", we ignore it (client response to ping)
     if (stringifiedData === 'pong') {
       console.log('keepAlive');
       return;
     }
-
-    // Broadcast the message to all other clients
     broadcast(ws, stringifiedData, false);
   });
 
-  // We won't close the connection unless the client manually disconnects
-  ws.on("close", () => {
-    console.log("Client disconnected");
-    console.log("Client size: ", wss.clients.size);
-  });
+  ws.on("close", (data) => {
+    console.log("closing connection");
 
-  // When the server is no longer needed, manually disconnect the connection
-  // But for this case, we'll keep the connection open indefinitely.
-});
-
-// Implement broadcast function because WebSocket doesn't have it
-const broadcast = (ws, message, includeSelf) => {
-  wss.clients.forEach((client) => {
-    if (client.readyState === WebSocket.OPEN) {
-      if (includeSelf || client !== ws) {
-        client.send(message);
-      }
+    if (wss.clients.size === 0) {
+      console.log("last client disconnected, stopping keepAlive interval");
+      clearInterval(keepAliveId);
     }
   });
+});
+
+// Implement broadcast function because of ws doesn't have it
+const broadcast = (ws, message, includeSelf) => {
+  if (includeSelf) {
+    wss.clients.forEach((client) => {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(message);
+      }
+    });
+  } else {
+    wss.clients.forEach((client) => {
+      if (client !== ws && client.readyState === WebSocket.OPEN) {
+        client.send(message);
+      }
+    });
+  }
 };
 
+/**
+ * Sends a ping message to all connected clients every 50 seconds
+ */
+ const keepServerAlive = () => {
+  keepAliveId = setInterval(() => {
+    wss.clients.forEach((client) => {
+      if (client.readyState === WebSocket.OPEN) {
+        // client.send('ping');
+      }
+    });
+  }, 5000);
+};
+
+
 app.get('/', (req, res) => {
-  res.send('Hello World!');
+    res.send('Hello World!');
 });
