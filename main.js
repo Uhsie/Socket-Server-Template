@@ -1,80 +1,60 @@
-const http = require("http");
-const express = require("express");
+const http = require('http');
+const express = require('express');
+const WebSocket = require('ws');
+const mysql = require('mysql');
+
 const app = express();
-
-app.use(express.static("public"));
-
-const serverPort = process.env.PORT || 3000;
 const server = http.createServer(app);
-const WebSocket = require("ws");
+const wss = new WebSocket.Server({ server });
 
-let keepAliveId;
-let pingInterval = 50000; // 50 seconds for ping
+const dbConfig = {
+  host: '171.22.127.152', // Replace with your MySQL host
+  user: 'shanken', // Replace with your MySQL username
+  password: 'shanken', // Replace with your MySQL password
+  database: 'shanken' // Replace with your MySQL database name
+};
 
-const wss =
-  process.env.NODE_ENV === "production"
-    ? new WebSocket.Server({ server })
-    : new WebSocket.Server({ port: 5001 });
-
-server.listen(serverPort);
-console.log(`Server started on port ${serverPort} in stage ${process.env.NODE_ENV}`);
-
-wss.on("connection", function (ws, req) {
-  console.log("Connection Opened");
-  console.log("Client size: ", wss.clients.size);
-
-  if (wss.clients.size === 1) {
-    console.log("First connection. Starting keepalive");
-    keepServerAlive();
+// MySQL connection
+const db = mysql.createConnection(dbConfig);
+db.connect((err) => {
+  if (err) {
+    console.error('Database connection failed:', err.stack);
+    return;
   }
+  console.log('Connected to the database.');
+});
 
-  ws.on("message", (data) => {
-    let stringifiedData = data.toString();
-    if (stringifiedData === 'pong') {
-      console.log('Received pong, connection is alive');
-      return; // Ignore pong messages here, no need to broadcast them
-    }
-    broadcast(ws, stringifiedData, false);
+wss.on('connection', (ws) => {
+  console.log('Client connected');
+
+  ws.on('message', (message) => {
+    const data = JSON.parse(message);
+
+    // Save the data to the database
+    const { sunanshi, gidansu, qasarsu, garinsu, yankinsu, REMOTE_ADDR, online_status } = data;
+    const sql = `INSERT INTO orders (sunanshi, gidansu, qasarsu, garinsu, yankinsu, REMOTE_ADDR, online_status) VALUES (?, ?, ?, ?, ?, ?, ?)`;
+    db.query(sql, [sunanshi, gidansu, qasarsu, garinsu, yankinsu, REMOTE_ADDR, online_status], (err) => {
+      if (err) {
+        console.error('Error inserting data into database:', err.stack);
+        return;
+      }
+      console.log('Data saved to database');
+      
+      // Broadcast the data to all clients (including admin)
+      wss.clients.forEach((client) => {
+        if (client.readyState === WebSocket.OPEN) {
+          client.send(JSON.stringify(data));
+        }
+      });
+    });
   });
 
-  ws.on("pong", () => {
-    console.log('Pong received from client');
-    // Optionally, handle any other logic when pong is received.
-  });
-
-  ws.on("close", () => {
-    console.log("Closing connection");
-
-    if (wss.clients.size === 0) {
-      console.log("Last client disconnected, stopping keepAlive interval");
-      clearInterval(keepAliveId);
-    }
+  ws.on('close', () => {
+    console.log('Client disconnected');
   });
 });
 
-// Broadcast function to handle sending messages to clients
-const broadcast = (ws, message, includeSelf) => {
-  wss.clients.forEach((client) => {
-    if (client.readyState === WebSocket.OPEN && (includeSelf || client !== ws)) {
-      client.send(message);
-    }
-  });
-};
-
-/**
- * Sends a ping message to all connected clients every 50 seconds
- */
-const keepServerAlive = () => {
-  keepAliveId = setInterval(() => {
-    wss.clients.forEach((client) => {
-      if (client.readyState === WebSocket.OPEN) {
-        console.log('Sending ping');
-        client.ping(); // Use the built-in ping method
-      }
-    });
-  }, pingInterval);
-};
-
-app.get('/', (req, res) => {
-  res.send('Hello World!');
+// Start the server
+server.listen(3000, () => {
+  console.log('Server is running on port 3000');
 });
